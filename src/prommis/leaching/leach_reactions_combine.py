@@ -25,7 +25,7 @@ Includes reactions for the following components with H2SO4:
 """
 
 from pyomo.common.config import ConfigValue
-from pyomo.environ import Expression, Param, Set, units
+from pyomo.environ import Expression, Param, Set, Var, units
 
 from idaes.core import ProcessBlock, ProcessBlockData, declare_process_block_class
 from idaes.core.base import property_meta
@@ -152,7 +152,7 @@ class CoalRefuseLeachingCombinedReactionParameterData(
         }
 
         self.R_p = Param(
-            initialize=1e-4,
+            initialize=4.35e-6,
             units=units.m,
             mutable=True,
             doc="Mean particle radius",
@@ -170,15 +170,14 @@ class CoalRefuseLeachingCombinedReactionParameterData(
         # is the solid volume fraction in that particular inlet stream, not the
         # overall reactor mixture. Must be set based on feed preparation conditions.
         self.phi_s_inlet = Param(
-            initialize=0.9,
+            initialize=0.95,
             units=units.dimensionless,
             mutable=True,
             doc="Volume fraction of solid in the solid inlet slurry stream",
         )
 
-        # Reaction order for H+ (dimensionless)
-        # must be re-fitted
-        self.A_ox = Param(
+        # Reaction order for H+ (dimensionless) - fitted per oxide
+        self.A_ox = Var(
             self.reaction_idx,
             initialize={
                 "Al2O3": 1.496716606,
@@ -194,18 +193,19 @@ class CoalRefuseLeachingCombinedReactionParameterData(
                 "Gd2O3": 1.063666638,
                 "Dy2O3": 0.428087853,
             },
+            bounds=(1e-4, 2),
             units=units.dimensionless,
-            mutable=True,
             doc="Reaction order with respect to H+ concentration",
         )
 
-        # Surface reaction rate constant [mol/m²/hour]
-        # must be re-fitted
-        self.k_prime = Param(
+        # Surface reaction rate constant [mol/m²/hour] - fitted per oxide
+        self.k_prime = Var(
             self.reaction_idx,
             initialize={
-                "Al2O3": 405.5050676,
-                "Fe2O3": 11.34710708,
+                # "Al2O3": 405.5050676,
+                # "Fe2O3": 11.34710708,
+                "Al2O3": 4e-3,
+                "Fe2O3": 1e-3,
                 "CaO": 0.081844698,
                 "Sc2O3": 0.000755073,
                 "Y2O3": 0.000528612,
@@ -217,52 +217,30 @@ class CoalRefuseLeachingCombinedReactionParameterData(
                 "Gd2O3": 0.013408467,
                 "Dy2O3": 4.56708e-05,
             },
+            # bounds=(1e-10, 1e6),
+            bounds=(1e-6, 1e2),
             units=units.mol * units.m**-2 * units.hour**-1,
-            mutable=True,
             doc="Surface reaction rate constant [mol/m²/hour]",
         )
 
-        # Film mass transfer coefficient [m/hour] - must be fitted to data
-        self.K_film = Param(
+        # Film mass transfer coefficient [m/hour] - fitted per oxide
+        self.K_film = Var(
             self.reaction_idx,
-            initialize={
-                "Al2O3": 1.0,
-                "Fe2O3": 1.0,
-                "CaO": 1.0,
-                "Sc2O3": 1.0,
-                "Y2O3": 1.0,
-                "La2O3": 1.0,
-                "Ce2O3": 1.0,
-                "Pr2O3": 1.0,
-                "Nd2O3": 1.0,
-                "Sm2O3": 1.0,
-                "Gd2O3": 1.0,
-                "Dy2O3": 1.0,
-            },
+            # initialize=0.5,
+            # bounds=(1e-3, 10),
+            initialize=1e-2,
+            bounds=(1e-3, 1e2),
             units=units.m * units.hour**-1,
-            mutable=True,
             doc="Film mass transfer coefficient",
         )
 
-        # Effective diffusivity in ash/product layer [m^2/hour] - must be fitted to data
-        self.D_e = Param(
+        # Effective diffusivity in ash/product layer [m^2/hour] - fitted per oxide
+        self.D_e = Var(
             self.reaction_idx,
-            initialize={
-                "Al2O3": 1.0,
-                "Fe2O3": 1.0,
-                "CaO": 1.0,
-                "Sc2O3": 1.0,
-                "Y2O3": 1.0,
-                "La2O3": 1.0,
-                "Ce2O3": 1.0,
-                "Pr2O3": 1.0,
-                "Nd2O3": 1.0,
-                "Sm2O3": 1.0,
-                "Gd2O3": 1.0,
-                "Dy2O3": 1.0,
-            },
+            initialize=1e-7,
+            # bounds=(1e-7, 1),
+            bounds=(1e-10, 1e-5),
             units=units.m**2 * units.hour**-1,
-            mutable=True,
             doc="Effective diffusivity through ash/product layer",
         )
 

@@ -262,7 +262,7 @@ def build_model():
     m.X = Var(
         m.oxides,
         m.t,
-        bounds=(0, 1 - 1e-4),
+        bounds=(0, 1 - 1e-8),
         initialize=0.01,
         doc="Solid-phase fractional conversion",
     )
@@ -336,7 +336,7 @@ def build_model():
             * m.pulp_density[t]
             * m.B[ox]
             * (m.C["H", t] / (units.mol / units.L)) ** m.A[ox]
-            * (1 - m.X[ox, t] + 1e-8) ** (2 / 3)
+            * (1 - m.X[ox, t]) ** (2 / 3)
         )
 
     for j in ALL_LIQ:
