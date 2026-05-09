@@ -170,7 +170,7 @@ class CoalRefuseLeachingCombinedReactionParameterData(
         # is the solid volume fraction in that particular inlet stream, not the
         # overall reactor mixture. Must be set based on feed preparation conditions.
         self.phi_s_inlet = Param(
-            initialize=0.95,
+            initialize=0.98,
             units=units.dimensionless,
             mutable=True,
             doc="Volume fraction of solid in the solid inlet slurry stream",
@@ -193,7 +193,7 @@ class CoalRefuseLeachingCombinedReactionParameterData(
                 "Gd2O3": 1.063666638,
                 "Dy2O3": 0.428087853,
             },
-            bounds=(1e-4, 2),
+            bounds=(1e-4, 3),
             units=units.dimensionless,
             doc="Reaction order with respect to H+ concentration",
         )
@@ -202,7 +202,8 @@ class CoalRefuseLeachingCombinedReactionParameterData(
             self.reaction_idx,
             initialize={
                 "Al2O3": 1e-4,
-                "Fe2O3": 1e-2,
+                # "Al2O3": 1e1,
+                "Fe2O3": 1.0,
                 "CaO": 0.081844698,
                 "Sc2O3": 0.000755073,
                 "Y2O3": 0.000528612,
@@ -212,34 +213,35 @@ class CoalRefuseLeachingCombinedReactionParameterData(
                 "Nd2O3": 0.006289942,
                 "Sm2O3": 0.000252479,
                 "Gd2O3": 0.013408467,
-                "Dy2O3": 4.56708e-05,
+                # "Dy2O3": 4.56708e-05,
+                "Dy2O3": 4.56708e-02,
             },
-            # bounds=(1e-10, 1e6),
-            bounds=(1e-6, 1e2),
+            # bounds=(1e-9, 1e2),
+            bounds=(1e-10, 1e4),
             units=units.mol * units.m**-2 * units.hour**-1,
             doc="Surface reaction rate constant [mol/m²/hour]",
         )
 
         # Film mass transfer coefficient [m/hour] - fitted per oxide
-        self.K_film = Var(
-            self.reaction_idx,
-            # initialize=0.5,
-            # bounds=(1e-3, 10),
-            initialize=1e-2,
-            bounds=(1e-3, 1e2),
-            units=units.m * units.hour**-1,
-            doc="Film mass transfer coefficient",
-        )
+        # self.K_film = Var(
+        #     self.reaction_idx,
+        #     # initialize=0.5,
+        #     # bounds=(1e-3, 10),
+        #     initialize=1e-2,
+        #     bounds=(1e-3, 1e2),
+        #     units=units.m * units.hour**-1,
+        #     doc="Film mass transfer coefficient",
+        # )
 
-        # Effective diffusivity in ash/product layer [m^2/hour] - fitted per oxide
-        self.D_e = Var(
-            self.reaction_idx,
-            initialize=1e-7,
-            # bounds=(1e-7, 1),
-            bounds=(1e-10, 1e-5),
-            units=units.m**2 * units.hour**-1,
-            doc="Effective diffusivity through ash/product layer",
-        )
+        # # Effective diffusivity in ash/product layer [m^2/hour] - fitted per oxide
+        # self.D_e = Var(
+        #     self.reaction_idx,
+        #     initialize=1e-7,
+        #     # bounds=(1e-7, 1),
+        #     bounds=(1e-10, 1e-5),
+        #     units=units.m**2 * units.hour**-1,
+        #     doc="Effective diffusivity through ash/product layer",
+        # )
 
     @classmethod
     def define_metadata(cls, obj):
@@ -334,7 +336,6 @@ class CoalRefuseLeachingCombinedReactionData(ProcessBlockData):
                 l_block.conc_mol_comp["H"], to_units=units.mol / units.m**3
             )
 
-            # Dimensionless H+ concentration for R_rxn: strip mol/m³
             c_h = h_conc_m3 / (units.mol / units.m**3)
 
             # Volume fraction of solid in the solid inlet stream [-]
@@ -355,9 +356,11 @@ class CoalRefuseLeachingCombinedReactionData(ProcessBlockData):
             V_total = V_solid + l_block.flow_vol  # [L/hour]
             phi_s_reactor = V_solid / V_total
 
-            rho_pulp = 1 / (
-                (phi_s_reactor / rho_solid) + ((1 - phi_s_reactor) / rho_liquid)
-            )
+            # rho_pulp = 1 / (
+            #     (phi_s_reactor / rho_solid) + ((1 - phi_s_reactor) / rho_liquid)
+            # )
+
+            rho_pulp = (phi_s_reactor * rho_solid) + ((1 - phi_s_reactor) * rho_liquid)
 
             # Liquid-to-solid volumetric ratio [L/kg]
             v_L_per_m_s = units.convert(
@@ -371,25 +374,32 @@ class CoalRefuseLeachingCombinedReactionData(ProcessBlockData):
 
             # --- Three series resistances, all in m²·hour/mol ---
 
-            # 1) Film diffusion resistance [m²·hour/mol]:
-            R_film = 1 / (b.params.K_film[r] * h_conc_m3)
+            # # 1) Film diffusion resistance [m²·hour/mol]:
+            # R_film = 1 / (b.params.K_film[r] * h_conc_m3)
 
-            # 2) Ash/product layer diffusion resistance [m²·hour/mol]:
-            R_ash = (
-                (1 - (1 - X) ** (1 / 3))
-                * b.params.R_p
-                / (b.params.D_e[r] * h_conc_m3 * (1 - X) ** (1 / 3))
-            )
+            # # 2) Ash/product layer diffusion resistance [m²·hour/mol]:
+            # R_ash = (
+            #     (1 - (1 - X) ** (1 / 3))
+            #     * b.params.R_p
+            #     / (b.params.D_e[r] * h_conc_m3 * (1 - X) ** (1 / 3))
+            # )
 
             # 3) Surface chemical reaction resistance [m²·hour/mol]:
-            R_rxn = 1 / (
-                b.params.k_prime[r] * c_h ** b.params.A_ox[r] * (1 - X) ** (2 / 3)
-            )
+            # R_rxn = 1 / (
+            #     b.params.k_prime[r] * c_h ** b.params.A_ox[r] * (1 - X) ** (2 / 3)
+            # )
 
             # Combined rate: 3·phi_s / (outer[m] · resistance_sum[m²·hr/mol])
             # = mol/(m³·hr) → convert to mol/L/hr
             return units.convert(
-                3 * phi_s_inlet / (outer_factor * (R_film + R_ash + R_rxn)),
+                (
+                    3
+                    * phi_s_inlet
+                    * b.params.k_prime[r]
+                    * c_h ** b.params.A_ox[r]
+                    * (1 - X + 1e-8) ** (2 / 3)
+                )
+                / (outer_factor),
                 to_units=units.mol / units.litre / units.hour,
             )
 

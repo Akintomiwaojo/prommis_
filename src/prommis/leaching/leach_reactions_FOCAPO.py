@@ -170,76 +170,75 @@ class CoalRefuseLeachingCombinedReactionParameterData(
         # is the solid volume fraction in that particular inlet stream, not the
         # overall reactor mixture. Must be set based on feed preparation conditions.
         self.phi_s_inlet = Param(
-            initialize=0.95,
+            initialize=0.98,
             units=units.dimensionless,
             mutable=True,
             doc="Volume fraction of solid in the solid inlet slurry stream",
         )
 
         # Reaction order for H+ (dimensionless) - fitted per oxide
-        self.A_ox = Var(
+        self.A_ox = Param(
             self.reaction_idx,
             initialize={
-                "Al2O3": 1.496716606,
-                "Fe2O3": 0.902948175,
-                "CaO": 0.159744406,
-                "Sc2O3": 0.763763942,
-                "Y2O3": 0.580700988,
-                "La2O3": 0.443101432,
-                "Ce2O3": 0.601391182,
-                "Pr2O3": 0.501916124,
-                "Nd2O3": 0.702951111,
-                "Sm2O3": 0.578717372,
-                "Gd2O3": 1.063666638,
-                "Dy2O3": 0.428087853,
+                "Al2O3": 1.817428,
+                "Fe2O3": 1.568735,
+                "CaO": 0.450338,
+                "Sc2O3": 1.298811,
+                "Y2O3": 1.011786,
+                "La2O3": 0.676162,
+                "Ce2O3": 0.983015,
+                "Pr2O3": 0.874288,
+                "Nd2O3": 1.212490,
+                "Sm2O3": 0.951297,
+                "Gd2O3": 2.022141,
+                "Dy2O3": 0.696615,
             },
-            bounds=(1e-4, 2),
             units=units.dimensionless,
+            mutable=True,
             doc="Reaction order with respect to H+ concentration",
         )
 
-        self.k_prime = Var(
+        self.k_prime = Param(
             self.reaction_idx,
             initialize={
-                "Al2O3": 1e-4,
-                "Fe2O3": 1e-2,
-                "CaO": 0.081844698,
-                "Sc2O3": 0.000755073,
-                "Y2O3": 0.000528612,
-                "La2O3": 0.001028295,
-                "Ce2O3": 0.007050046,
-                "Pr2O3": 0.000522858,
-                "Nd2O3": 0.006289942,
-                "Sm2O3": 0.000252479,
-                "Gd2O3": 0.013408467,
-                "Dy2O3": 4.56708e-05,
+                "Al2O3": 1.895190e-06,
+                "Fe2O3": 6.469110e-06,
+                "CaO": 4.234305e-05,
+                "Sc2O3": 1.698118e-09,
+                "Y2O3": 6.562151e-09,
+                "La2O3": 5.904430e-08,
+                "Ce2O3": 8.215390e-08,
+                "Pr2O3": 1.400371e-08,
+                "Nd2O3": 2.513283e-08,
+                "Sm2O3": 3.553179e-09,
+                "Gd2O3": 1.047959e-09,
+                "Dy2O3": 2.773243e-09,
             },
-            # bounds=(1e-10, 1e6),
-            bounds=(1e-6, 1e2),
             units=units.mol * units.m**-2 * units.hour**-1,
+            mutable=True,
             doc="Surface reaction rate constant [mol/m²/hour]",
         )
 
         # Film mass transfer coefficient [m/hour] - fitted per oxide
-        self.K_film = Var(
-            self.reaction_idx,
-            # initialize=0.5,
-            # bounds=(1e-3, 10),
-            initialize=1e-2,
-            bounds=(1e-3, 1e2),
-            units=units.m * units.hour**-1,
-            doc="Film mass transfer coefficient",
-        )
+        # self.K_film = Var(
+        #     self.reaction_idx,
+        #     # initialize=0.5,
+        #     # bounds=(1e-3, 10),
+        #     initialize=1e-2,
+        #     bounds=(1e-3, 1e2),
+        #     units=units.m * units.hour**-1,
+        #     doc="Film mass transfer coefficient",
+        # )
 
-        # Effective diffusivity in ash/product layer [m^2/hour] - fitted per oxide
-        self.D_e = Var(
-            self.reaction_idx,
-            initialize=1e-7,
-            # bounds=(1e-7, 1),
-            bounds=(1e-10, 1e-5),
-            units=units.m**2 * units.hour**-1,
-            doc="Effective diffusivity through ash/product layer",
-        )
+        # # Effective diffusivity in ash/product layer [m^2/hour] - fitted per oxide
+        # self.D_e = Var(
+        #     self.reaction_idx,
+        #     initialize=1e-7,
+        #     # bounds=(1e-7, 1),
+        #     bounds=(1e-10, 1e-5),
+        #     units=units.m**2 * units.hour**-1,
+        #     doc="Effective diffusivity through ash/product layer",
+        # )
 
     @classmethod
     def define_metadata(cls, obj):
@@ -334,7 +333,6 @@ class CoalRefuseLeachingCombinedReactionData(ProcessBlockData):
                 l_block.conc_mol_comp["H"], to_units=units.mol / units.m**3
             )
 
-            # Dimensionless H+ concentration for R_rxn: strip mol/m³
             c_h = h_conc_m3 / (units.mol / units.m**3)
 
             # Volume fraction of solid in the solid inlet stream [-]
@@ -355,9 +353,7 @@ class CoalRefuseLeachingCombinedReactionData(ProcessBlockData):
             V_total = V_solid + l_block.flow_vol  # [L/hour]
             phi_s_reactor = V_solid / V_total
 
-            rho_pulp = 1 / (
-                (phi_s_reactor / rho_solid) + ((1 - phi_s_reactor) / rho_liquid)
-            )
+            rho_pulp = (phi_s_reactor * rho_solid) + ((1 - phi_s_reactor) * rho_liquid)
 
             # Liquid-to-solid volumetric ratio [L/kg]
             v_L_per_m_s = units.convert(
@@ -371,25 +367,32 @@ class CoalRefuseLeachingCombinedReactionData(ProcessBlockData):
 
             # --- Three series resistances, all in m²·hour/mol ---
 
-            # 1) Film diffusion resistance [m²·hour/mol]:
-            R_film = 1 / (b.params.K_film[r] * h_conc_m3)
+            # # 1) Film diffusion resistance [m²·hour/mol]:
+            # R_film = 1 / (b.params.K_film[r] * h_conc_m3)
 
-            # 2) Ash/product layer diffusion resistance [m²·hour/mol]:
-            R_ash = (
-                (1 - (1 - X) ** (1 / 3))
-                * b.params.R_p
-                / (b.params.D_e[r] * h_conc_m3 * (1 - X) ** (1 / 3))
-            )
+            # # 2) Ash/product layer diffusion resistance [m²·hour/mol]:
+            # R_ash = (
+            #     (1 - (1 - X) ** (1 / 3))
+            #     * b.params.R_p
+            #     / (b.params.D_e[r] * h_conc_m3 * (1 - X) ** (1 / 3))
+            # )
 
             # 3) Surface chemical reaction resistance [m²·hour/mol]:
-            R_rxn = 1 / (
-                b.params.k_prime[r] * c_h ** b.params.A_ox[r] * (1 - X) ** (2 / 3)
-            )
+            # R_rxn = 1 / (
+            #     b.params.k_prime[r] * c_h ** b.params.A_ox[r] * (1 - X) ** (2 / 3)
+            # )
 
             # Combined rate: 3·phi_s / (outer[m] · resistance_sum[m²·hr/mol])
             # = mol/(m³·hr) → convert to mol/L/hr
             return units.convert(
-                3 * phi_s_inlet / (outer_factor * (R_film + R_ash + R_rxn)),
+                (
+                    3
+                    * phi_s_inlet
+                    * b.params.k_prime[r]
+                    * c_h ** b.params.A_ox[r]
+                    * (1 - X + 1e-8) ** (2 / 3)
+                )
+                / (outer_factor),
                 to_units=units.mol / units.litre / units.hour,
             )
 
