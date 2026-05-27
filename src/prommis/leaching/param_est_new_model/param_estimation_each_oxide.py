@@ -16,7 +16,7 @@ from idaes.core import FlowsheetBlock
 from idaes.core.util.scaling import set_scaling_factor
 
 from prommis.leaching.leach_train import LeachingTrain, LeachingTrainInitializer
-from prommis.leaching.leach_reactions_combine import (
+from prommis.leaching.param_est_new_model.leach_reactions_combine import (
     CoalRefuseLeachingCombinedReactionParameterBlock,
 )
 from prommis.properties.coal_refuse_properties import CoalRefuseParameters

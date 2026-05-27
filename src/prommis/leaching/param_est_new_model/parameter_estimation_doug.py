@@ -9,7 +9,6 @@ from pyomo.environ import (
     Objective,
     minimize,
 )
-
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -18,18 +17,14 @@ import pandas as pd
 from idaes.core import FlowsheetBlock
 from idaes.core.scaling import CustomScalerBase
 
-from prommis.leaching.leach_train import (
-    LeachingTrain,
-    LeachingTrainInitializer,
-    LeachingTrainScaler,
-)
+from prommis.leaching.leach_train import LeachingTrain, LeachingTrainInitializer
 
 # from prommis.leaching.leach_reactions_combine import (
 #     CoalRefuseLeachingCombinedReactionParameterBlock,
 # )
 
 from prommis.leaching.leach_reactions import CoalRefuseLeachingReactionParameterBlock
-from prommis.leaching.leach_reactions_FOCAPO import (
+from prommis.leaching.param_est_new_model.leach_reactions_doug import (
     CoalRefuseLeachingCombinedReactionParameterBlock,
 )
 from prommis.properties.coal_refuse_properties import (
@@ -43,7 +38,10 @@ from prommis.properties.sulfuric_acid_leaching_properties import (
 
 from sklearn.metrics import r2_score, root_mean_squared_error
 
-import re
+# ---------------------------------------------------------------------------
+# Shared scaling helpers (used by both the parameter estimation and simulation
+# models below)
+# ---------------------------------------------------------------------------
 
 # Expected outlet concentrations [mg/L] at ~20 % recovery, S/L = 1/10.
 # Computed from solid feed composition × stoichiometry / liquid flow rate.
@@ -68,8 +66,8 @@ def _scale_leach_train_blocks(model, csb, op_cond, solid_feed, acid_conc):
 
     Covers volume, solid inlet/outlet (flow mass, mass fractions, conversions),
     and liquid inlet/outlet (flow rate, acid species, all leached species).
-    Then delegates to the ``LeachingTrainScaler`` for extent variables, material
-    balance constraints, and all remaining constraint scaling.
+    Delegates ``conc_mol_comp`` and constraint scaling to the property-block
+    scalers so nothing is missed.
 
     Parameters
     ----------
@@ -86,7 +84,6 @@ def _scale_leach_train_blocks(model, csb, op_cond, solid_feed, acid_conc):
     """
     liq_scaler = SulfuricAcidLeachingPropertiesScaler()
     solid_scaler = CoalRefusePropertiesScaler()
-    train_scaler = LeachingTrainScaler()
 
     for s in op_cond:
         # Volume (100 gal ≈ 378.5 L)
@@ -150,30 +147,38 @@ def _scale_leach_train_blocks(model, csb, op_cond, solid_feed, acid_conc):
             liq_scaler.variable_scaling_routine(blk, overwrite=False)
             liq_scaler.constraint_scaling_routine(blk, overwrite=False)
 
-        # ---- Extent variables + all constraint scaling via LeachingTrainScaler ----
-        # The train scaler delegates to the MSContactor scaler which computes
-        # heterogeneous_reaction_extent SFs from stoichiometry and the (already
-        # set) property variable SFs, then scales material balances, het-rxn
-        # generation/constraint, and the extent constraint (rate × volume).
-        train_scaler.variable_scaling_routine(model.fs.leach[s], overwrite=False)
-        train_scaler.constraint_scaling_routine(model.fs.leach[s], overwrite=False)
 
-
+# ---------------------------------------------------------------------------
+# Read Data
+# ---------------------------------------------------------------------------
 data = pd.read_csv("parameter estimation.csv")
 data = data.dropna(axis=1, how="all")
 data = data.set_index(data.columns[0])
 
+
+# ---------------------------------------------------------------------------
+# Parameter estimation model (m) — combined SCM with fitted A_ox, k_prime,
+# K_film, D_e
+# ---------------------------------------------------------------------------
 m = ConcreteModel()
+
 m.OpCond = Set(
     initialize=[
+        "0.025M S_L=1/10",
         "0.05M S_L=1/10",
+        "0.075M S_L=1/10",
         "0.05M S_L=1.5/10",
+        "0.05M S_L=2/10",
+        "0.075M S_L=1.5/10",
     ],
+    doc="Operating conditions",
 )
 m.fs = FlowsheetBlock(dynamic=False)
+
 m.fs.leach_soln = SulfuricAcidLeachingParameters()
 m.fs.coal = CoalRefuseParameters()
-m.fs.leach_rxns = CoalRefuseLeachingReactionParameterBlock()
+m.fs.leach_rxns = CoalRefuseLeachingCombinedReactionParameterBlock()
+
 
 m.fs.leach = LeachingTrain(
     m.OpCond,
@@ -192,19 +197,27 @@ m.fs.leach = LeachingTrain(
 )
 
 solid_feed_variation = {
+    "0.025M S_L=1/10": 22.68,
     "0.05M S_L=1/10": 22.67,
+    "0.075M S_L=1/10": 22.68,
     "0.05M S_L=1.5/10": 34.02,
+    "0.05M S_L=2/10": 45.36,
+    "0.075M S_L=1.5/10": 34.02,
 }
 
 acid_conc_variation = {
+    "0.025M S_L=1/10": 0.025,
     "0.05M S_L=1/10": 0.05,
+    "0.075M S_L=1/10": 0.075,
     "0.05M S_L=1.5/10": 0.05,
+    "0.05M S_L=2/10": 0.05,
+    "0.075M S_L=1.5/10": 0.075,
 }
-
 
 m.fs.leach[:].liquid_inlet.flow_vol.fix(224.3 * units.L / units.hour)
 m.fs.leach[:].liquid_inlet.conc_mass_comp.fix(1e-10 * units.mg / units.L)
 m.fs.leach[:].liquid_inlet.conc_mass_comp[:, "H2O"].fix(1e6 * units.mg / units.L)
+
 m.fs.leach[:].liquid_inlet.conc_mass_comp[0, "HSO4"].fix(1e-8 * units.mg / units.L)
 
 for j in m.OpCond:
@@ -249,22 +262,165 @@ m.fs.leach[:].solid_inlet.mass_frac_comp[0, "Gd2O3"].fix(
 m.fs.leach[:].solid_inlet.mass_frac_comp[0, "Dy2O3"].fix(
     7.54827e-06 * units.kg / units.kg
 )
+
 m.fs.leach[:].volume.fix(100 * units.gallon)
+
+m.fs.leach_rxns.A_ox["Al2O3"].setlb(0.90)
+m.fs.leach_rxns.A_ox["Al2O3"].setub(2.0)
+m.fs.leach_rxns.k_prime["Al2O3"].set_value(1e-6)
+# m.fs.leach_rxns.A_ox["Fe2O3"].setub(1.2)
+m.fs.leach_rxns.k_prime["Fe2O3"].set_value(1e-2)
+m.fs.leach_rxns.A_ox["Fe2O3"].set_value(1.5)
 
 
 m.scaling_factor = Suffix(direction=Suffix.EXPORT)
+csb = CustomScalerBase()
+
+
+_k_prime_sf = {
+    # "Al2O3": 1 / 1e-4,
+    "Al2O3": 1 / 5e-8,
+    "Fe2O3": 1 / 1.0,
+    "CaO": 1 / 0.082,
+    "Sc2O3": 1 / 7.55e-4,
+    "Y2O3": 1 / 5.29e-4,
+    "La2O3": 1 / 1.03e-3,
+    "Ce2O3": 1 / 7.05e-3,
+    "Pr2O3": 1 / 5.23e-4,
+    "Nd2O3": 1 / 6.29e-3,
+    "Sm2O3": 1 / 2.52e-4,
+    "Gd2O3": 1 / 1.34e-2,
+    "Dy2O3": 1 / 4.57e-5,
+}
+for comp in m.fs.leach_rxns.reaction_idx:
+    csb.set_variable_scaling_factor(m.fs.leach_rxns.A_ox[comp], 1)
+    csb.set_variable_scaling_factor(m.fs.leach_rxns.k_prime[comp], _k_prime_sf[comp])
+    # csb.set_variable_scaling_factor(m.fs.leach_rxns.K_film[comp], 1e2)
+    # csb.set_variable_scaling_factor(m.fs.leach_rxns.D_e[comp], 1e7)
+
+_scale_leach_train_blocks(m, csb, m.OpCond, solid_feed_variation, acid_conc_variation)
+
+m.recovery_sse = Objective(
+    expr=sum(
+        ((m.fs.leach[j].recovery[0, comp] - data.loc[comp, j]) / data.loc[comp, j]) ** 2
+        for j in m.OpCond
+        for comp in m.fs.coal.component_list - ["inerts"]
+    ),
+    sense=minimize,
+)
+
+scaling = TransformationFactory("core.scale_model")
+scaled_model = scaling.create_using(m, rename=False)
+
+# Solve scaled model
+solver = SolverFactory("ipopt_v2")
+solver.options["max_iter"] = 5000
+solver.solve(scaled_model, tee=True)
+
+
+scaling.propagate_solution(scaled_model, m)
+
+
+# ---------------------------------------------------------------------------
+# Simulation model (m2) — Andrew's simple shrinking-core model (Params only)
+# ---------------------------------------------------------------------------
+m2 = ConcreteModel()
+m2.OpCond = Set(
+    initialize=[
+        "0.025M S_L=1/10",
+        "0.05M S_L=1/10",
+        "0.075M S_L=1/10",
+        "0.05M S_L=1.5/10",
+        "0.05M S_L=2/10",
+        "0.075M S_L=1.5/10",
+    ],
+)
+m2.fs = FlowsheetBlock(dynamic=False)
+m2.fs.leach_soln = SulfuricAcidLeachingParameters()
+m2.fs.coal = CoalRefuseParameters()
+m2.fs.leach_rxns = CoalRefuseLeachingReactionParameterBlock()
+
+m2.fs.leach = LeachingTrain(
+    m2.OpCond,
+    number_of_tanks=1,
+    liquid_phase={
+        "property_package": m2.fs.leach_soln,
+        "has_energy_balance": False,
+        "has_pressure_balance": False,
+    },
+    solid_phase={
+        "property_package": m2.fs.coal,
+        "has_energy_balance": False,
+        "has_pressure_balance": False,
+    },
+    reaction_package=m2.fs.leach_rxns,
+)
+
+m2.fs.leach[:].liquid_inlet.flow_vol.fix(224.3 * units.L / units.hour)
+m2.fs.leach[:].liquid_inlet.conc_mass_comp.fix(1e-10 * units.mg / units.L)
+m2.fs.leach[:].liquid_inlet.conc_mass_comp[:, "H2O"].fix(1e6 * units.mg / units.L)
+m2.fs.leach[:].liquid_inlet.conc_mass_comp[0, "HSO4"].fix(1e-8 * units.mg / units.L)
+
+for j in m2.OpCond:
+    m2.fs.leach[j].liquid_inlet.conc_mass_comp[0, "H"].fix(
+        2 * acid_conc_variation[j] * 1e3 * units.mg / units.L
+    )
+    m2.fs.leach[j].liquid_inlet.conc_mass_comp[0, "SO4"].fix(
+        acid_conc_variation[j] * 96e3 * units.mg / units.L
+    )
+    m2.fs.leach[j].solid_inlet.flow_mass.fix(
+        solid_feed_variation[j] * units.kg / units.hour
+    )
+
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "inerts"].fix(0.6952 * units.kg / units.kg)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Al2O3"].fix(0.237 * units.kg / units.kg)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Fe2O3"].fix(0.0642 * units.kg / units.kg)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "CaO"].fix(3.31e-3 * units.kg / units.kg)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Sc2O3"].fix(
+    2.77966e-05 * units.kg / units.kg
+)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Y2O3"].fix(
+    3.28653e-05 * units.kg / units.kg
+)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "La2O3"].fix(
+    6.77769e-05 * units.kg / units.kg
+)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Ce2O3"].fix(
+    0.000156161 * units.kg / units.kg
+)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Pr2O3"].fix(
+    1.71438e-05 * units.kg / units.kg
+)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Nd2O3"].fix(
+    6.76618e-05 * units.kg / units.kg
+)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Sm2O3"].fix(
+    1.47926e-05 * units.kg / units.kg
+)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Gd2O3"].fix(
+    1.0405e-05 * units.kg / units.kg
+)
+m2.fs.leach[:].solid_inlet.mass_frac_comp[0, "Dy2O3"].fix(
+    7.54827e-06 * units.kg / units.kg
+)
+m2.fs.leach[:].volume.fix(100 * units.gallon)
+
+
+m2.scaling_factor = Suffix(direction=Suffix.EXPORT)
 csb2 = CustomScalerBase()
 
-_scale_leach_train_blocks(m, csb2, m.OpCond, solid_feed_variation, acid_conc_variation)
+_scale_leach_train_blocks(
+    m2, csb2, m2.OpCond, solid_feed_variation, acid_conc_variation
+)
 
 scaling2 = TransformationFactory("core.scale_model")
-scaled_model2 = scaling2.create_using(m, rename=False)
+scaled_model2 = scaling2.create_using(m2, rename=False)
 
 solver2 = SolverFactory("ipopt_v2")
 solver2.options["max_iter"] = 5000
 solver2.solve(scaled_model2, tee=True)
 
-scaling2.propagate_solution(scaled_model2, m)
+scaling2.propagate_solution(scaled_model2, m2)
 
 
 # ---------------------------------------------------------------------------
@@ -274,99 +430,86 @@ exp_data = {}
 for comp in m.fs.coal.component_list - ["inerts"]:
     exp_data[comp] = [data.loc[comp, j] for j in m.OpCond]
 
+
 model_data = {}
 for comp in m.fs.coal.component_list - ["inerts"]:
     model_data[comp] = [m.fs.leach[j].recovery[0, comp]() for j in m.OpCond]
 
+model_data_simple = {}
+for comp in m2.fs.coal.component_list - ["inerts"]:
+    model_data_simple[comp] = [m2.fs.leach[j].recovery[0, comp]() for j in m2.OpCond]
 
-plt.rcParams.update(
-    {
-        "font.family": "serif",  # Times-like font expected by most journals
-        "font.sans-serif": ["Inter"],
-        "font.size": 9,  # Base font size
-        "axes.labelsize": 9,
-        "axes.titlesize": 9,
-        "xtick.labelsize": 9,
-        "ytick.labelsize": 9,
-        "legend.fontsize": 9,
-        "figure.dpi": 300,  # 300 dpi minimum for print
-        "savefig.dpi": 300,
-        "savefig.bbox": "tight",
-        "axes.linewidth": 0.8,
-        "xtick.major.width": 0.8,
-        "ytick.major.width": 0.8,
-        "xtick.direction": "in",
-        "ytick.direction": "in",
-        "xtick.major.pad": 4,
-        "ytick.major.pad": 4,
-        "axes.spines.top": False,  # remove top/right spines
-        "axes.spines.right": False,
-    }
-)
-
-
-def format_oxide(name):
-    """Sc2O3 → $\mathrm{Sc_2O_3}$"""
-    formatted = re.sub(r"(\d+)", r"_{\1}", name)  # wrap digits in _{...}
-    return rf"$\mathrm{{{formatted}}}$"
-
-
-labels = []
-for j in m.OpCond:
-    # extract just the S/L ratio part, e.g. "1/10", "1.5/10"
-    match = re.search(r"(\d+\.?\d*/\d+)", str(j))
-    labels.append(match.group(1) if match else str(j))
 
 for comp in m.fs.coal.component_list - ["inerts"]:
     y_exp = np.array(exp_data[comp])
     y_mod = np.array(model_data[comp])
+    y_mod_sim = np.array(model_data_simple[comp])
 
     r2 = r2_score(y_exp, y_mod)
+    r2_sim = r2_score(y_exp, y_mod_sim)
+
     RMSE_est = root_mean_squared_error(y_exp, y_mod)
+    RMSE_sim = root_mean_squared_error(y_exp, y_mod_sim)
 
-    fig, ax = plt.subplots(figsize=(3.5, 3.0))
-
-    x = np.arange(len(y_exp))
-    width = 0.35
-
-    ax.bar(
-        x - width / 2,
+    plt.figure(figsize=(5, 5), dpi=100)
+    plt.scatter(
         y_exp,
-        width,
-        label="Experimental",
-        color="#0072B2",
-        edgecolor="black",
-        linewidth=0.8,
-    )
-    ax.bar(
-        x + width / 2,
         y_mod,
-        width,
-        label="Model",
-        color="#D55E00",
-        edgecolor="black",
-        linewidth=0.8,
+        label="Current Model",
+        marker="o",
+        color="#1f77b4",
     )
 
-    # labels = [j.replace("_", " : ").replace("S : L", "S/L") for j in m.OpCond]
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.set_ylabel("Recovery (%)")
-    ax.set_ylim(0, max(max(y_exp), max(y_mod)) * 1.15)
-    ax.set_title(
-        f"Recovery Comparison for {format_oxide(comp)}",
-        fontsize=9,
-        pad=6,
-        linespacing=1.6,
+    plt.scatter(
+        y_exp,
+        y_mod_sim,
+        label="Andrew's Model",
+        marker="s",
+        color="#ff7f0e",
     )
-    ax.legend(frameon=False, loc="upper right", fontsize=8)
-    # ax.annotate(
-    #     f"RMSE = {RMSE_est:.2f}%",
-    #     xy=(1.0, 1.02), xycoords="axes fraction",
-    #     ha="right", va="bottom", fontsize=8,
-    #     color="#555555",
-    # )
-    fig.tight_layout()
-    # fig.savefig(f"recovery_{comp}.png", transparent=False)
-    # fig.savefig(f"recovery_{comp}.svg")          # vector format for submission
+
+    plt.plot(
+        y_exp,
+        y_exp,
+        label="Parity line (y = x)",
+        color="k",
+    )
+
+    plt.xlabel("Experimental Recovery (%)")
+    plt.ylabel("Model Recovery (%)")
+    plt.title("Parity Plot: Experimental vs Model Extraction for " + comp)
+    plt.legend()
+    plt.text(
+        0.05,
+        0.95,
+        f"Current model: $R^2 = {r2:.4f}$",
+        # f"Current model: RMSE = {RMSE_est:.4f}",
+        transform=plt.gca().transAxes,
+        fontsize=12,
+        verticalalignment="top",
+    )
+    plt.text(
+        0.05,
+        0.88,
+        f"Andrew's model: $R^2 = {r2_sim:.4f}$",
+        # f"Andrew's model: RMSE = {RMSE_sim:.4f}",
+        transform=plt.gca().transAxes,
+        fontsize=12,
+        verticalalignment="top",
+    )
+    plt.tight_layout()
     plt.show()
+
+
+# ---------------------------------------------------------------------------
+# Print fitted parameters
+# ---------------------------------------------------------------------------
+print("\n=== Fitted Parameters ===")
+print(f"{'Oxide':<10} {'A_ox':>12} {'k_prime':>14}")
+print("-" * 40)
+for comp in m.fs.coal.component_list - ["inerts"]:
+    print(
+        f"{comp:<10} "
+        f"{m.fs.leach_rxns.A_ox[comp].value:>12.6f} "
+        f"{m.fs.leach_rxns.k_prime[comp].value:>14.6e} "
+    )

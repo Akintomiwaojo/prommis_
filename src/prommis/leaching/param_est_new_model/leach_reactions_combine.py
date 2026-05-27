@@ -220,24 +220,37 @@ class CoalRefuseLeachingCombinedReactionParameterData(
             doc="Surface reaction rate constant [mol/m²/hour]",
         )
 
-        # Film mass transfer coefficient [m/hour] - fitted per oxide
-        self.K_film = Var(
+        # # Film mass transfer coefficient [m/hour] - fitted per oxide
+        # self.K_film = Var(
+        #     self.reaction_idx,
+        #     initialize=0.5,
+        #     bounds=(1e-3, 10),
+        #     units=units.m * units.hour**-1,
+        #     doc="Film mass transfer coefficient",
+        # )
+
+        # self.D_e = Var(
+        #     self.reaction_idx,
+        #     initialize=1e-7,
+        #     bounds=(1e-10, 1e-5),
+        #     units=units.m**2 * units.hour**-1,
+        #     doc="Effective diffusivity through ash/product layer",
+        # )
+
+        # To make the ash and film diffusions parts go to zero.
+        self.K_film = Param(
             self.reaction_idx,
-            # initialize=0.5,
-            # bounds=(1e-3, 10),
-            initialize=1e-2,
-            bounds=(1e-3, 1e2),
+            initialize=1e7,
             units=units.m * units.hour**-1,
+            mutable=True,
             doc="Film mass transfer coefficient",
         )
 
-        # Effective diffusivity in ash/product layer [m^2/hour] - fitted per oxide
-        self.D_e = Var(
+        self.D_e = Param(
             self.reaction_idx,
-            initialize=1e-7,
-            # bounds=(1e-7, 1),
-            bounds=(1e-10, 1e-5),
+            initialize=1e7,
             units=units.m**2 * units.hour**-1,
+            mutable=True,
             doc="Effective diffusivity through ash/product layer",
         )
 
@@ -355,9 +368,11 @@ class CoalRefuseLeachingCombinedReactionData(ProcessBlockData):
             V_total = V_solid + l_block.flow_vol  # [L/hour]
             phi_s_reactor = V_solid / V_total
 
-            rho_pulp = 1 / (
-                (phi_s_reactor / rho_solid) + ((1 - phi_s_reactor) / rho_liquid)
-            )
+            # rho_pulp = 1 / (
+            #     (phi_s_reactor / rho_solid) + ((1 - phi_s_reactor) / rho_liquid)
+            # )
+
+            rho_pulp = (phi_s_reactor * rho_solid) + ((1 - phi_s_reactor) * rho_liquid)
 
             # Liquid-to-solid volumetric ratio [L/kg]
             v_L_per_m_s = units.convert(

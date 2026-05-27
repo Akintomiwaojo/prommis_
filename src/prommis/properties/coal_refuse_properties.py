@@ -156,6 +156,7 @@ class CoalRefuseParameterData(PhysicalParameterBlock):
         self.mass_frac_comp_initial = Param(
             self.component_list,
             units=units.kg / units.kg,
+            mutable=True,
             initialize={
                 "inerts": 0.6952,
                 "Al2O3": 0.237,

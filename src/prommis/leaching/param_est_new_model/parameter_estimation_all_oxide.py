@@ -18,15 +18,10 @@ from idaes.core import FlowsheetBlock
 from idaes.core.scaling import CustomScalerBase
 
 from prommis.leaching.leach_train import LeachingTrain, LeachingTrainInitializer
-
-# from prommis.leaching.leach_reactions_combine import (
-#     CoalRefuseLeachingCombinedReactionParameterBlock,
-# )
-
-from prommis.leaching.leach_reactions import CoalRefuseLeachingReactionParameterBlock
-from prommis.leaching.leach_reactions_doug import (
+from prommis.leaching.param_est_new_model.leach_reactions_combine import (
     CoalRefuseLeachingCombinedReactionParameterBlock,
 )
+from prommis.leaching.leach_reactions import CoalRefuseLeachingReactionParameterBlock
 from prommis.properties.coal_refuse_properties import (
     CoalRefuseParameters,
     CoalRefusePropertiesScaler,
@@ -36,7 +31,7 @@ from prommis.properties.sulfuric_acid_leaching_properties import (
     SulfuricAcidLeachingPropertiesScaler,
 )
 
-from sklearn.metrics import r2_score, root_mean_squared_error
+from sklearn.metrics import r2_score
 
 # ---------------------------------------------------------------------------
 # Shared scaling helpers (used by both the parameter estimation and simulation
@@ -100,27 +95,9 @@ def _scale_leach_train_blocks(model, csb, op_cond, solid_feed, acid_conc):
             for comp in model.fs.coal.component_list:
                 x0 = model.fs.coal.mass_frac_comp_initial[comp].value
                 csb.set_variable_scaling_factor(blk.mass_frac_comp[comp], 1 / x0)
-
             if hasattr(blk, "conversion_comp"):
-                _conv_sf = {
-                    "Al2O3": 1 / 0.15,
-                    "Fe2O3": 1 / 0.20,
-                    "CaO": 1 / 0.20,
-                    "Sc2O3": 1 / 0.15,
-                    "Y2O3": 1 / 0.15,
-                    "La2O3": 1 / 0.15,
-                    "Ce2O3": 1 / 0.18,
-                    "Pr2O3": 1 / 0.15,
-                    "Nd2O3": 1 / 0.18,
-                    "Sm2O3": 1 / 0.15,
-                    "Gd2O3": 1 / 0.18,
-                    "Dy2O3": 1 / 0.12,
-                    "inerts": 1,
-                }
-
                 for comp in model.fs.coal.component_list:
-                    sf = _conv_sf.get(comp, 1)
-                    csb.set_variable_scaling_factor(blk.conversion_comp[comp], sf)
+                    csb.set_variable_scaling_factor(blk.conversion_comp[comp], 1)
             solid_scaler.constraint_scaling_routine(blk, overwrite=False)
 
         # Liquid inlet: condition-specific H+ and SO4; scaler fills conc_mol_comp
@@ -134,6 +111,8 @@ def _scale_leach_train_blocks(model, csb, op_cond, solid_feed, acid_conc):
             )
             liq_scaler.variable_scaling_routine(blk, overwrite=False)
 
+        # Liquid outlet: all leached species; scaler handles conc_mol_comp
+        # and molar_concentration / hso4_dissociation constraints
         for blk in model.fs.leach[s].mscontactor.liquid.values():
             csb.set_variable_scaling_factor(blk.flow_vol, 1 / 224.3)
             csb.set_variable_scaling_factor(
@@ -265,22 +244,16 @@ m.fs.leach[:].solid_inlet.mass_frac_comp[0, "Dy2O3"].fix(
 
 m.fs.leach[:].volume.fix(100 * units.gallon)
 
-m.fs.leach_rxns.A_ox["Al2O3"].setlb(0.90)
-m.fs.leach_rxns.A_ox["Al2O3"].setub(2.0)
-m.fs.leach_rxns.k_prime["Al2O3"].set_value(1e-6)
-# m.fs.leach_rxns.A_ox["Fe2O3"].setub(1.2)
-m.fs.leach_rxns.k_prime["Fe2O3"].set_value(1e-2)
-m.fs.leach_rxns.A_ox["Fe2O3"].set_value(1.5)
-
 
 m.scaling_factor = Suffix(direction=Suffix.EXPORT)
 csb = CustomScalerBase()
 
-
+# Reaction parameter variables (the NLP decision variables).
+# Scale each by 1/initial_value so the solver sees them near O(1).
+# K_film is uniformly initialised at 1e-2 m/hr; D_e at 1e-7 m²/hr.
 _k_prime_sf = {
-    # "Al2O3": 1 / 1e-4,
-    "Al2O3": 1 / 5e-8,
-    "Fe2O3": 1 / 1.0,
+    "Al2O3": 1 / 1e-4,
+    "Fe2O3": 1 / 1e-2,
     "CaO": 1 / 0.082,
     "Sc2O3": 1 / 7.55e-4,
     "Y2O3": 1 / 5.29e-4,
@@ -302,12 +275,19 @@ _scale_leach_train_blocks(m, csb, m.OpCond, solid_feed_variation, acid_conc_vari
 
 m.recovery_sse = Objective(
     expr=sum(
-        ((m.fs.leach[j].recovery[0, comp] - data.loc[comp, j]) / data.loc[comp, j]) ** 2
+        ((m.fs.leach[j].recovery[0, comp] - data.loc[comp, j])) ** 2
         for j in m.OpCond
         for comp in m.fs.coal.component_list - ["inerts"]
     ),
     sense=minimize,
 )
+
+# / data.loc[comp, j]
+
+for t in m.fs.leach:
+    for s in m.fs.leach[t].mscontactor.liquid:
+        m.fs.leach[t].mscontactor.liquid[s].conc_mol_comp["H"].setlb(1e-8)
+
 
 scaling = TransformationFactory("core.scale_model")
 scaled_model = scaling.create_using(m, rename=False)
@@ -315,7 +295,9 @@ scaled_model = scaling.create_using(m, rename=False)
 # Solve scaled model
 solver = SolverFactory("ipopt_v2")
 solver.options["max_iter"] = 5000
-solver.solve(scaled_model, tee=True)
+solver.options["halt_on_ampl_error"] = "yes"
+solver.options["bound_relax_factor"] = 0
+results = solver.solve(scaled_model, tee=True)
 
 
 scaling.propagate_solution(scaled_model, m)
@@ -448,9 +430,6 @@ for comp in m.fs.coal.component_list - ["inerts"]:
     r2 = r2_score(y_exp, y_mod)
     r2_sim = r2_score(y_exp, y_mod_sim)
 
-    RMSE_est = root_mean_squared_error(y_exp, y_mod)
-    RMSE_sim = root_mean_squared_error(y_exp, y_mod_sim)
-
     plt.figure(figsize=(5, 5), dpi=100)
     plt.scatter(
         y_exp,
@@ -483,7 +462,6 @@ for comp in m.fs.coal.component_list - ["inerts"]:
         0.05,
         0.95,
         f"Current model: $R^2 = {r2:.4f}$",
-        # f"Current model: RMSE = {RMSE_est:.4f}",
         transform=plt.gca().transAxes,
         fontsize=12,
         verticalalignment="top",
@@ -492,7 +470,6 @@ for comp in m.fs.coal.component_list - ["inerts"]:
         0.05,
         0.88,
         f"Andrew's model: $R^2 = {r2_sim:.4f}$",
-        # f"Andrew's model: RMSE = {RMSE_sim:.4f}",
         transform=plt.gca().transAxes,
         fontsize=12,
         verticalalignment="top",
@@ -505,11 +482,13 @@ for comp in m.fs.coal.component_list - ["inerts"]:
 # Print fitted parameters
 # ---------------------------------------------------------------------------
 print("\n=== Fitted Parameters ===")
-print(f"{'Oxide':<10} {'A_ox':>12} {'k_prime':>14}")
-print("-" * 40)
+print(f"{'Oxide':<10} {'A_ox':>12} {'k_prime':>14} {'K_film':>14} {'D_e':>14}")
+print("-" * 66)
 for comp in m.fs.coal.component_list - ["inerts"]:
     print(
         f"{comp:<10} "
         f"{m.fs.leach_rxns.A_ox[comp].value:>12.6f} "
         f"{m.fs.leach_rxns.k_prime[comp].value:>14.6e} "
+        f"{m.fs.leach_rxns.K_film[comp].value:>14.6e} "
+        f"{m.fs.leach_rxns.D_e[comp].value:>14.6e}"
     )

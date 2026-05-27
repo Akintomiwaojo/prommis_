@@ -17,7 +17,7 @@ from idaes.core.scaling import CustomScalerBase
 
 from prommis.leaching.leach_train import LeachingTrain
 from prommis.leaching.leach_reactions import CoalRefuseLeachingReactionParameterBlock
-from prommis.leaching.leach_reactions_doug import (
+from prommis.leaching.param_est_new_model.leach_reactions_doug import (
     CoalRefuseLeachingCombinedReactionParameterBlock,
 )
 from prommis.properties.coal_refuse_properties import (
@@ -29,7 +29,6 @@ from prommis.properties.sulfuric_acid_leaching_properties import (
     SulfuricAcidLeachingPropertiesScaler,
 )
 from sklearn.metrics import r2_score
-
 
 # ---------------------------------------------------------------------------
 # Liquid outlet scaling factors [mg/L] at ~20% recovery, S/L = 1/10
